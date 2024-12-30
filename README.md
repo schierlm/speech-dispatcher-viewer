@@ -23,4 +23,9 @@ Unix socket at `/run/user/<UID>/speech-dispatcher/viewer.sock` for communication
 
 Then in `speech-dispatcher`, as output module, select the `viewer` module.
 
+In the viewer window, you can choose to forward shown speech to another speech-dispatcher module,
+and enable/disable both updating the window and forwarding speech.
+Note that, compared to just using the other module, this causes a delay and does not support enqueueing
+and stopping speech. So prefer switching back to just speech if you don't need the viewer.
+
 Enjoy your shown speech.

@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-import gi, sys, threading, time, socket, os
+import gi, sys, threading, time, socket, os, speechd
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, GLib
 
@@ -15,6 +15,37 @@ class SpeechWindow(Gtk.Window):
         vbox.pack_start(self.settings_expander, False, False, 0)
         expander_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.settings_expander.add(expander_vbox)
+        self.speak_cb = Gtk.CheckButton.new_with_mnemonic("Also _speak via")
+        self.speak_cb.connect("toggled", self.update_expander)
+        sf = Gtk.Frame(label_widget=self.speak_cb)
+        expander_vbox.pack_start(sf, False, False, 0)
+        grid = Gtk.Grid(border_width=5)
+        self.sd_client = speechd.SSIPClient("Viewer")
+        self.sd_client.set_data_mode(speechd.DataMode.SSML)
+        grid.attach(Gtk.Label(label="Synthesizer:"), 0, 0, 1, 1)
+        self.sd_module_combo = Gtk.ComboBoxText()
+        self.sd_module_combo.set_entry_text_column(0)
+        self.sd_module_combo.set_hexpand(True)
+        for mod in self.sd_client.list_output_modules():
+            if mod != "viewer":
+                self.sd_module_combo.append_text(mod)
+        self.sd_module_combo.set_active(0)
+        self.sd_module_combo.connect("changed", self.on_sd_module_changed)
+        grid.attach(self.sd_module_combo, 1, 0, 1, 1)
+        grid.attach(Gtk.Label(label="Language:"), 0, 1, 1, 1)
+        self.sd_language_combo = Gtk.ComboBoxText()
+        self.sd_language_combo.set_entry_text_column(0)
+        self.sd_language_combo.set_hexpand(True)
+        self.sd_language_combo.connect("changed", self.on_sd_language_changed)
+        grid.attach(self.sd_language_combo, 1, 1, 1, 1)
+        grid.attach(Gtk.Label(label="Person:"), 0, 2, 1, 1)
+        self.sd_voice_combo = Gtk.ComboBoxText()
+        self.sd_voice_combo.set_entry_text_column(0)
+        self.sd_voice_combo.set_hexpand(True)
+        self.sd_voice_combo.connect("changed", self.on_sd_voice_changed)
+        grid.attach(self.sd_voice_combo, 1, 2, 1, 1)
+        self.on_sd_module_changed(None)
+        sf.add(grid)
         self.update_cb = Gtk.CheckButton.new_with_mnemonic("_Update text")
         self.update_cb.set_active(True)
         self.update_cb.connect("toggled", self.update_expander)
@@ -47,17 +78,85 @@ class SpeechWindow(Gtk.Window):
         self.connect("destroy", Gtk.main_quit)
 
     def update_expander(self, button):
+        s = self.speak_cb.get_active()
         u = self.update_cb.get_active()
         l = "Settings (Not active)"
-        if u:
-            l = "Settings (Updating)"
+        if s and u:
+            l = "Settings (Speaking & Updating)"
+        elif s:
+            l = "Settings (Speaking only)"
+        elif u:
+            l = "Settings (Updating only)"
         self.settings_expander.set_label(l)
 
     def on_clear_clicked(self, button):
         self.textbuf.delete( self.textbuf.get_start_iter(), self.textbuf.get_end_iter())
 
+    def on_sd_module_changed(self, button):
+        self.sd_client.set_output_module(self.sd_module_combo.get_active_text())
+        all_langs = []
+        self.sd_language_combo.remove_all()
+        for voice in self.sd_client.list_synthesis_voices():
+            lang = voice[1]
+            if lang == None:
+                lang = "(None)"
+            if not lang in all_langs:
+                all_langs.append(lang)
+                self.sd_language_combo.append_text(lang)
+        self.sd_language_combo.set_active(0)
+        self.on_sd_language_changed(None)
+
+    def on_sd_language_changed(self, button):
+        lang = self.sd_language_combo.get_active_text()
+        if isinstance(lang, str):
+            self.sd_client.set_language(lang)
+            self.sd_voice_combo.remove_all()
+            for voice in self.sd_client.list_synthesis_voices():
+                vlang = voice[1]
+                if vlang == None:
+                    vlang = "(None)"
+                if vlang == lang:
+                    self.sd_voice_combo.append_text(voice[0])
+            self.sd_voice_combo.set_active(0)
+            self.on_sd_voice_changed(None)
+
+    def on_sd_voice_changed(self, button):
+        self.sd_client.set_synthesis_voice(self.sd_voice_combo.get_active_text())
+
     def message_received(self, text):
         parts = text.split(" ", 1)
+        if self.speak_cb.get_active():
+            if parts[0] == 'SET':
+                xy = 9 # TODO implement AND(!) test!
+                [var, val] = parts[1].split("=", 1)
+                if var == "rate":
+                    self.sd_client.set_rate(int(val))
+                elif var == "pitch":
+                    self.sd_client.set_pitch(int(val))
+                elif var == "pitch_range":
+                    self.sd_client.set_pitch_range(int(val))
+                elif var == "volume":
+                    self.sd_client.set_volume(int(val))
+                elif var == "punctuation":
+                    self.sd_client.set_punctuation(val)
+                elif var == "spelling":
+                    self.sd_client.set_spelling(val == "on")
+                elif var == "cap_let_recogn":
+                    self.sd_client.set_cap_let_recogn(val)
+                elif var == "priority":
+                    self.sd_client.set_priority(val)
+            elif parts[0] == 'SAY_CHAR':
+                self.sd_client.char(parts[1])
+            elif parts[0] == 'SAY_KEY':
+                self.sd_client.key(parts[1])
+            elif parts[0].startswith("SAY"):
+                self.sd_client.speak(parts[1])
+            elif parts[0] == 'PAUSE':
+                self.sd_client.pause()
+            elif parts[0] == 'STOP':
+                self.sd_client.stop()
+            elif parts[0] == 'SOUND_ICON':
+                self.sd_client.sound_icon(parts[1])
         if self.update_cb.get_active():
             level = self.detail_combo.get_active() + 1
             show = level > 3
